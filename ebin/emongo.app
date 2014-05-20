@@ -1,14 +1,12 @@
-{application, emongo, [
-    {description, "Erlang MongoDB Driver"},
-    {vsn, "0.2"},
-    {modules, [
-		emongo,
-		emongo_app,
-		emongo_bson,
-		emongo_conn,
-		emongo_packet
-    ]},
-    {registered, []},
-    {mod, {emongo_app, []}},
-    {applications, [kernel, stdlib, sasl]}
-]}.
+{application,emongo,
+             [{description,"Erlang MongoDB Driver"},
+              {vsn,"1.0"},
+              {registered,[]},
+              {applications,[kernel,stdlib]},
+              {mod,{emongo_app,[]}},
+              {env,[{pools,[{test,[{size,1},
+                                   {host,"localhost"},
+                                   {port,27017},
+                                   {database,"test"}]}]}]},
+              {modules,[emongo,emongo_app,emongo_bson,emongo_conn,
+                        emongo_packet,emongo_sup]}]}.

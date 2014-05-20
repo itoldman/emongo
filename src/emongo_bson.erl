@@ -151,7 +151,7 @@ decode(<<>>, Acc) ->
 	
 decode(Bin, Acc) ->
 	{Doc, Rest} = decode_next(Bin),
-	decode(Rest, [Doc|Acc]).
+	decode(Rest, [proplists:delete(<<"_id">>, Doc)|Acc]).
 	
 decode_next(<<Size:32/little-signed, Rest/binary>>) ->
 	Size1 = Size-5,
@@ -201,7 +201,7 @@ decode_value(5, <<Size:32/little-signed, SubType:8/little, BinData:Size/binary-l
 %% OID
 decode_value(7, <<OID:12/binary, Tail/binary>>) ->
 	{{oid, OID}, Tail};
-	
+
 %% BOOL	
 decode_value(8, <<0:8, Tail/binary>>) ->
 	{false, Tail};

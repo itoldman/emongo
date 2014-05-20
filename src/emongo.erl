@@ -126,6 +126,51 @@ getnonce(Pid, Pool) ->
 	end.
 
 %%------------------------------------------------------------------------------
+%% process
+%%------------------------------------------------------------------------------
+process(Json) ->
+	L = jsx:decode(Json),
+	Action = proplists:get_value(<<"action">>, L),
+	DB = tolist(proplists:get_value(<<"db">>, L)),
+	Table = tolist(proplists:get_value(<<"table">>, L)),
+	PoolId = poolid(),
+	{Pid, Pool} = gen_server:call(?MODULE, {pid, PoolId}, infinity),
+	R = process(Action, L, Pid, Pool, DB, Table),
+	RetID = proplists:get_value(<<"retID">>, L),
+	OtherArg = proplists:get_value(<<"othArg">>, L),
+	encode(R, RetID, OtherArg).
+	
+process(<<"insert">>, L, Pid, Pool, DB, Table) ->
+	Doc = proplists:get_value(<<"doc">>, L),
+	Packet = emongo_packet:insert(DB, Table, Pool#pool.req_id, [Doc]),
+	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
+process(<<"delete">>, L, Pid, Pool, DB, Table) ->
+	Cond = proplists:get_value(<<"cond">>, L),
+	Packet = emongo_packet:delete(DB, Table, Pool#pool.req_id, transform_selector(Cond)),
+	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
+process(<<"update">>, L, Pid, Pool, DB, Table) ->
+	Cond = proplists:get_value(<<"cond">>, L),
+	Doc = proplists:get_value(<<"doc">>, L),
+	Upsert = proplists:get_value(<<"upsert">>, L, true),
+	Packet = emongo_packet:update(DB, Table, Pool#pool.req_id, Upsert, Cond, Doc),
+	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
+process(<<"find">>, L, Pid, Pool, DB, Table) ->
+	Cond = proplists:get_value(<<"cond">>, L),
+	Fields = proplists:get_value(<<"fields">>, L, []),
+	Limit = proplists:get_value(<<"limit">>, L, 0),
+	Offset = proplists:get_value(<<"offset">>, L, 0),
+	Orderby = proplists:get_value(<<"orderby">>, L, []),
+	Query = create_query([
+		{fields, Fields}, {limit, Limit}, {offset, Offset},
+		{orderby, Orderby}], Cond),
+	Packet = emongo_packet:do_query(DB, Table, Pool#pool.req_id, Query),
+	Resp = emongo_conn:send_recv(Pid, Pool#pool.req_id, Packet, proplists:get_value(timeout, L, ?TIMEOUT)),
+	case lists:member(response_options, L) of
+		true -> Resp;
+		false -> Resp#response.documents
+	end.
+
+%%------------------------------------------------------------------------------
 %% find
 %%------------------------------------------------------------------------------
 find(PoolId, Collection) ->
@@ -218,20 +263,6 @@ kill_cursors(PoolId, CursorIDs) when is_list(CursorIDs) ->
 	{Pid, Pool} = gen_server:call(?MODULE, {pid, PoolId}, infinity),
 	Packet = emongo_packet:kill_cursors(Pool#pool.req_id, CursorIDs),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet).
-
-%%------------------------------------------------------------------------------
-%% process
-%%------------------------------------------------------------------------------
-process(Json) ->
-	L = jsx:decode(Json),
-	Action = proplists:get_value(<<"action">>, L),
-	handle_action(Action, L).
-
-handle_action(<<"insert">>, L) ->
-	{ok, [{Pool, _}|_]} = application:get_env(emongo, pools),
-	Col = tolist(proplists:get_value(<<"table">>, L)),
-	Docs = proplists:get_value(<<"docs">>, L),
-	insert(Pool, Col, Docs).
 
 %%------------------------------------------------------------------------------
 %% insert
@@ -531,6 +562,9 @@ create_query([{offset, Offset}|Options], QueryRec, QueryDoc, OptDoc) ->
 	QueryRec1 = QueryRec#emo_query{offset=Offset},
 	create_query(Options, QueryRec1, QueryDoc, OptDoc);
 
+create_query([{orderby, []}|Options], QueryRec, QueryDoc, OptDoc) ->
+	create_query(Options, QueryRec, QueryDoc, OptDoc);
+
 create_query([{orderby, Orderby}|Options], QueryRec, QueryDoc, OptDoc) ->
 	Orderby1 = [{Key, case Dir of desc -> -1; _ -> 1 end}|| {Key, Dir} <- Orderby],
 	OptDoc1 = [{<<"orderby">>, Orderby1}|OptDoc],
@@ -603,6 +637,10 @@ hex0(14) -> $e;
 hex0(15) -> $f;
 hex0(I) ->  $0 + I.
 
+poolid() ->
+	{ok, [{PoolId, _}|_]} = application:get_env(emongo, pools),
+	PoolId.
+
 tobin(V) when is_binary(V) ->
 	V;
 tobin(V) when is_list(V) ->
@@ -615,4 +653,12 @@ tolist(V) when is_list(V) ->
 tolist(V) when is_binary(V) ->
 	binary_to_list(V);
 tolist(V) when is_atom(V) ->
-	atom_to_list(V).  	  	 	 	   	 	
+	atom_to_list(V).  
+
+encode(ok, RetID, OtherArg) ->
+	jsx:encode([{result, <<"ok">>}, {retID, RetID}, {othArg, OtherArg}]);
+encode(V, RetID, OtherArg) ->
+	jsx:encode([{result, V}, {retID, RetID}, {othArg, OtherArg}]).
+
+
+

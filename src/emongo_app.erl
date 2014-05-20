@@ -23,14 +23,16 @@
 -module(emongo_app).
 -behaviour(application).
 
--export([start/2,stop/1, init/1]).
+%% Application callbacks
+-export([start/2, stop/1]).
 
-start(_, _) ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+%% ===================================================================
+%% Application callbacks
+%% ===================================================================
 
-stop(_) -> ok.
+start(_StartType, _StartArgs) ->
+	application:start(jsx),
+	emongo_sup:start_link().
 
-init(_) ->
-   {ok, {{one_for_one, 10, 10}, [
-       {emongo, {emongo, start_link, []}, permanent, 5000, worker, [emongo]}
-   ]}}.
+stop(_State) ->
+    ok.
