@@ -31,7 +31,7 @@
          get_more/4, get_more/5, find_one/3, find_one/4, kill_cursors/2,
 		 insert/3, update/4, update/5, update_sync/4, update_sync/5,
 		 delete/2, delete/3, ensure_index/3, count/2, dec2hex/1,
-		 hex2dec/1]).
+		 hex2dec/1, process/1]).
 
 -include("emongo.hrl").
 
@@ -218,7 +218,21 @@ kill_cursors(PoolId, CursorIDs) when is_list(CursorIDs) ->
 	{Pid, Pool} = gen_server:call(?MODULE, {pid, PoolId}, infinity),
 	Packet = emongo_packet:kill_cursors(Pool#pool.req_id, CursorIDs),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet).
-	
+
+%%------------------------------------------------------------------------------
+%% process
+%%------------------------------------------------------------------------------
+process(Json) ->
+	L = jsx:decode(Json),
+	Action = proplists:get_value(<<"action">>, L),
+	handle_action(Action, L).
+
+handle_action(<<"insert">>, L) ->
+	{ok, [{Pool, _}|_]} = application:get_env(emongo, pools),
+	Col = tolist(proplists:get_value(<<"table">>, L)),
+	Docs = proplists:get_value(<<"docs">>, L),
+	insert(Pool, Col, Docs).
+
 %%------------------------------------------------------------------------------
 %% insert
 %%------------------------------------------------------------------------------
@@ -540,30 +554,30 @@ transform_selector([{where, Val}|Tail], Acc) when is_list(Val) ->
 	
 transform_selector([{Key, [{_,_}|_]=Vals}|Tail], Acc) ->
 	Vals1 =
-		[case Operator of
-			O when O == '>'; O == gt -> 
+		[case tobin(Operator) of
+			O when O == <<">">>; O == <<"gt">> -> 
 				{<<"$gt">>, Val};
-			O when O == '<'; O == lt ->
+			O when O == <<"<">>; O == <<"lt">>  ->
 				{<<"$lt">>, Val};
-			O when O == '>='; O == gte ->
+			O when O == <<">=">>; O == <<"gte">> ->
 				{<<"$gte">>, Val};
-			O when O == '=<'; O == lte ->
+			O when O == <<"=<">>; O == <<"lte">> ->
 				{<<"$lte">>, Val};
-			O when O == '=/='; O == '/='; O == ne ->
+			O when O == <<"=/=">>; O == <<"/=">>; O == <<"ne">> ->
 				{<<"$ne">>, Val};
-			in when is_list(Val) -> 
+			<<"in">> when is_list(Val) -> 
 				{<<"$in">>, {array, Val}};
-			nin when is_list(Val) -> 
+			<<"nin">> when is_list(Val) -> 
 				{<<"$nin">>, {array, Val}};
-			mod when is_list(Val), length(Val) == 2 ->
+			<<"mod">> when is_list(Val), length(Val) == 2 ->
 				{<<"$mod">>, {array, Val}};
-			all when is_list(Val) ->
+			<<"all">> when is_list(Val) ->
 				{<<"$all">>, {array, Val}};
-			size when is_integer(Val) ->
+			<<"size">> when is_integer(Val) ->
 				{<<"$size">>, Val};
-			exists when is_boolean(Val) ->
+			<<"exists">> when is_boolean(Val) ->
 				{<<"$exists">>, Val};
-			near when is_list(Val) -> 
+			<<"near">> when is_list(Val) -> 
 				{<<"$near">>, {array, Val}};
 			_ -> 
 				{Operator, Val}
@@ -588,4 +602,17 @@ hex0(13) -> $d;
 hex0(14) -> $e;
 hex0(15) -> $f;
 hex0(I) ->  $0 + I.
-	
+
+tobin(V) when is_binary(V) ->
+	V;
+tobin(V) when is_list(V) ->
+	list_to_binary(V);
+tobin(V) when is_atom(V) ->
+	list_to_binary(atom_to_list(V)).
+
+tolist(V) when is_list(V) ->
+	V;
+tolist(V) when is_binary(V) ->
+	binary_to_list(V);
+tolist(V) when is_atom(V) ->
+	atom_to_list(V).  	  	 	 	   	 	
