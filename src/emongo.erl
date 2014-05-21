@@ -29,7 +29,7 @@
 -export([pools/0, oid/0, oid_generation_time/1, add_pool/5, remove_pool/1,
          auth/3, find/2, find/3, find/4, find_all/2, find_all/3, find_all/4,
          get_more/4, get_more/5, find_one/3, find_one/4, kill_cursors/2,
-		 insert/3, update/4, update/5, update_sync/4, update_sync/5,
+		 insert/3, update/4, update/6, update_sync/4, update_sync/6,
 		 delete/2, delete/3, ensure_index/3, count/2, dec2hex/1,
 		 hex2dec/1, process/1]).
 
@@ -151,8 +151,9 @@ process(<<"del">>, L, Pid, Pool, DB, Table) ->
 process(<<"update">>, L, Pid, Pool, DB, Table) ->
 	Cond = proplists:get_value(<<"cond">>, L),
 	Doc = proplists:get_value(<<"doc">>, L),
-	Upsert = proplists:get_value(<<"upsert">>, L, true),
-	Packet = emongo_packet:update(DB, Table, Pool#pool.req_id, Upsert, Cond, Doc),
+	Upsert = proplists:get_value(<<"upsert">>, L, false),
+	MultiUpdate = proplists:get_value(<<"multi">>, L, false),
+	Packet = emongo_packet:update(DB, Table, Pool#pool.req_id, Upsert, MultiUpdate, Cond, Doc),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
 process(<<"find">>, L, Pid, Pool, DB, Table) ->
 	Cond = proplists:get_value(<<"cond">>, L),
@@ -279,25 +280,26 @@ insert(PoolId, Collection, Documents) when ?IS_LIST_OF_DOCUMENTS(Documents) ->
 %% update
 %%------------------------------------------------------------------------------
 update(PoolId, Collection, Selector, Document) when ?IS_DOCUMENT(Selector), ?IS_DOCUMENT(Document) ->
-	update(PoolId, Collection, Selector, Document, false).
+	update(PoolId, Collection, Selector, Document, false, false).
 	
-update(PoolId, Collection, Selector, Document, Upsert) when ?IS_DOCUMENT(Selector), ?IS_DOCUMENT(Document) ->
+update(PoolId, Collection, Selector, Document, Upsert, MultiUpdate) when ?IS_DOCUMENT(Selector), ?IS_DOCUMENT(Document) ->
 	{Pid, Pool} = gen_server:call(?MODULE, {pid, PoolId}, infinity),
-	Packet = emongo_packet:update(Pool#pool.database, Collection, Pool#pool.req_id, Upsert, Selector, Document),
+	Packet = emongo_packet:update(Pool#pool.database, Collection, Pool#pool.req_id, Upsert, MultiUpdate, Selector, Document),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet).
 
 %%------------------------------------------------------------------------------
 %% update_sync that runs db.$cmd.findOne({getlasterror: 1});
 %%------------------------------------------------------------------------------
 update_sync(PoolId, Collection, Selector, Document) when ?IS_DOCUMENT(Selector), ?IS_DOCUMENT(Document) ->
-	update_sync(PoolId, Collection, Selector, Document, false).
+	update_sync(PoolId, Collection, Selector, Document, false, false).
 	
-update_sync(PoolId, Collection, Selector, Document, Upsert) when ?IS_DOCUMENT(Selector), ?IS_DOCUMENT(Document) ->
+update_sync(PoolId, Collection, Selector, Document, Upsert, MultiUpdate) when ?IS_DOCUMENT(Selector), ?IS_DOCUMENT(Document) ->
 	{Pid, Pool} = gen_server:call(?MODULE, {pid, PoolId}, infinity),
-	Packet1 = emongo_packet:update(Pool#pool.database, Collection, Pool#pool.req_id, Upsert, Selector, Document),
+	Packet1 = emongo_packet:update(Pool#pool.database, Collection, Pool#pool.req_id, Upsert, MultiUpdate, Selector, Document),
 	Query1 = #emo_query{q=[{<<"getlasterror">>, 1}], limit=1},
     Packet2 = emongo_packet:do_query(Pool#pool.database, "$cmd", Pool#pool.req_id, Query1),
     Resp = emongo_conn:send_sync(Pid, Pool#pool.req_id, Packet1, Packet2, ?TIMEOUT),
+    io:format("response is~p~n", [Resp]), 
     case lists:keysearch(<<"updatedExisting">>, 1, lists:nth(1, Resp#response.documents)) of
         false ->
             undefined;
