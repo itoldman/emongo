@@ -570,8 +570,12 @@ create_query([{orderby, Orderby}|Options], QueryRec, QueryDoc, OptDoc) ->
 	OptDoc1 = [{<<"orderby">>, Orderby1}|OptDoc],
 	create_query(Options, QueryRec, QueryDoc, OptDoc1);
 	
+% create_query([{fields, Fields}|Options], QueryRec, QueryDoc, OptDoc) ->
+% 	QueryRec1 = QueryRec#emo_query{field_selector=[{Field, 1} || Field <- Fields]},
+% 	create_query(Options, QueryRec1, QueryDoc, OptDoc);
+
 create_query([{fields, Fields}|Options], QueryRec, QueryDoc, OptDoc) ->
-	QueryRec1 = QueryRec#emo_query{field_selector=[{Field, 1} || Field <- Fields]},
+	QueryRec1 = QueryRec#emo_query{field_selector=Fields},
 	create_query(Options, QueryRec1, QueryDoc, OptDoc);
 	
 create_query([_|Options], QueryRec, QueryDoc, OptDoc) ->
