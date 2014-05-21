@@ -144,7 +144,7 @@ process(<<"insert">>, L, Pid, Pool, DB, Table) ->
 	Doc = proplists:get_value(<<"doc">>, L),
 	Packet = emongo_packet:insert(DB, Table, Pool#pool.req_id, [Doc]),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
-process(<<"delete">>, L, Pid, Pool, DB, Table) ->
+process(<<"del">>, L, Pid, Pool, DB, Table) ->
 	Cond = proplists:get_value(<<"cond">>, L),
 	Packet = emongo_packet:delete(DB, Table, Pool#pool.req_id, transform_selector(Cond)),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
