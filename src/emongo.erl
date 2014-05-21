@@ -155,6 +155,19 @@ process(<<"update">>, L, Pid, Pool, DB, Table) ->
 	MultiUpdate = proplists:get_value(<<"multi">>, L, false),
 	Packet = emongo_packet:update(DB, Table, Pool#pool.req_id, Upsert, MultiUpdate, Cond, Doc),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
+process(<<"update_sync">>, L, Pid, Pool, DB, Table) ->
+	Cond = proplists:get_value(<<"cond">>, L),
+	Doc = proplists:get_value(<<"doc">>, L),
+	Upsert = proplists:get_value(<<"upsert">>, L, false),
+	MultiUpdate = proplists:get_value(<<"multi">>, L, false),
+	Packet1 = emongo_packet:update(DB, Table, Pool#pool.req_id, Upsert, MultiUpdate, Cond, Doc),
+	Query1 = #emo_query{q=[{<<"getlasterror">>, 1}], limit=1},
+    Packet2 = emongo_packet:do_query(DB, "$cmd", Pool#pool.req_id, Query1),
+    Resp = emongo_conn:send_sync(Pid, Pool#pool.req_id, Packet1, Packet2, ?TIMEOUT),
+    Result = lists:nth(1, Resp#response.documents),
+    UpdatedExisting = proplists:get_value(<<"updatedExisting">>, Result, false),
+    NDoc = proplists:get_value(<<"n">>, Result, 0),
+    [{updatedExisting, UpdatedExisting}, {ndoc, NDoc}];
 process(<<"find">>, L, Pid, Pool, DB, Table) ->
 	Cond = proplists:get_value(<<"cond">>, L),
 	Fields = proplists:get_value(<<"fields">>, L, []),
