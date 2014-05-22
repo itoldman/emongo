@@ -31,7 +31,7 @@
          get_more/4, get_more/5, find_one/3, find_one/4, kill_cursors/2,
 		 insert/3, update/4, update/6, update_sync/4, update_sync/6,
 		 delete/2, delete/3, ensure_index/3, count/2, dec2hex/1,
-		 hex2dec/1, process/1]).
+		 hex2dec/1, process/1, process_async/1, do_process/2]).
 
 -include("emongo.hrl").
 
@@ -139,23 +139,56 @@ process(Json) ->
 	RetID = proplists:get_value(<<"retID">>, L),
 	OtherArg = proplists:get_value(<<"othArg">>, L),
 	encode(R, RetID, OtherArg).
-	
+
+process_async(Json) ->
+	spawn(?MODULE, do_process, [self(), Json]).
+
+do_process(Pid, Json) ->	
+	L = jsx:decode(Json),
+	Action = proplists:get_value(<<"action">>, L),
+	DB = tolist(proplists:get_value(<<"db">>, L)),
+	Table = tolist(proplists:get_value(<<"table">>, L)),
+	PoolId = poolid(),
+	{Pid2, Pool} = gen_server:call(?MODULE, {pid, PoolId}, infinity),
+	R = process(Action, L, Pid2, Pool, DB, Table),
+	RetID = proplists:get_value(<<"retID">>, L),
+	OtherArg = proplists:get_value(<<"othArg">>, L),
+	Pid ! encode(R, RetID, OtherArg).
+
 process(<<"insert">>, L, Pid, Pool, DB, Table) ->
+	Doc = proplists:get_value(<<"doc">>, L),
+	Packet1 = emongo_packet:insert(DB, Table, Pool#pool.req_id, [Doc]),
+	Query1 = #emo_query{q=[{<<"getlasterror">>, 1}], limit=1},
+    Packet2 = emongo_packet:do_query(DB, "$cmd", Pool#pool.req_id, Query1),
+    Resp = emongo_conn:send_sync(Pid, Pool#pool.req_id, Packet1, Packet2, ?TIMEOUT),
+    Result = lists:nth(1, Resp#response.documents),
+    Ok = proplists:get_value(<<"ok">>, Result),
+    if Ok == 1.0 -> ok; true ->  [{err, proplists:get_value(<<"err">>, Result)}] end;
+process(<<"insert_async">>, L, Pid, Pool, DB, Table) ->
 	Doc = proplists:get_value(<<"doc">>, L),
 	Packet = emongo_packet:insert(DB, Table, Pool#pool.req_id, [Doc]),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
 process(<<"del">>, L, Pid, Pool, DB, Table) ->
 	Cond = proplists:get_value(<<"cond">>, L),
+	Packet1 = emongo_packet:delete(DB, Table, Pool#pool.req_id, transform_selector(Cond)),
+	Query1 = #emo_query{q=[{<<"getlasterror">>, 1}], limit=1},
+    Packet2 = emongo_packet:do_query(DB, "$cmd", Pool#pool.req_id, Query1),
+    Resp = emongo_conn:send_sync(Pid, Pool#pool.req_id, Packet1, Packet2, ?TIMEOUT),
+    Result = lists:nth(1, Resp#response.documents),
+    Ok = proplists:get_value(<<"ok">>, Result),
+   	if Ok == 1.0 -> ok; true ->  [{err, proplists:get_value(<<"err">>, Result)}] end;
+process(<<"del_async">>, L, Pid, Pool, DB, Table) ->
+	Cond = proplists:get_value(<<"cond">>, L),
 	Packet = emongo_packet:delete(DB, Table, Pool#pool.req_id, transform_selector(Cond)),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
-process(<<"update">>, L, Pid, Pool, DB, Table) ->
+process(<<"update_async">>, L, Pid, Pool, DB, Table) ->
 	Cond = proplists:get_value(<<"cond">>, L),
 	Doc = proplists:get_value(<<"doc">>, L),
 	Upsert = proplists:get_value(<<"upsert">>, L, false),
 	MultiUpdate = proplists:get_value(<<"multi">>, L, false),
 	Packet = emongo_packet:update(DB, Table, Pool#pool.req_id, Upsert, MultiUpdate, Cond, Doc),
 	emongo_conn:send(Pid, Pool#pool.req_id, Packet);
-process(<<"update_sync">>, L, Pid, Pool, DB, Table) ->
+process(<<"update">>, L, Pid, Pool, DB, Table) ->
 	Cond = proplists:get_value(<<"cond">>, L),
 	Doc = proplists:get_value(<<"doc">>, L),
 	Upsert = proplists:get_value(<<"upsert">>, L, false),
