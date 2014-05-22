@@ -153,7 +153,7 @@ do_process(Pid, Json) ->
 	R = process(Action, L, Pid2, Pool, DB, Table),
 	RetID = proplists:get_value(<<"retID">>, L),
 	OtherArg = proplists:get_value(<<"othArg">>, L),
-	Pid ! encode(R, RetID, OtherArg).
+	Pid ! {db_result, encode(R, RetID, OtherArg)}.
 
 process(<<"insert">>, L, Pid, Pool, DB, Table) ->
 	Doc = proplists:get_value(<<"doc">>, L),
