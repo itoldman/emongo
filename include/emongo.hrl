@@ -16,7 +16,7 @@
 		)
 	))).
 
--define(TIMEOUT, 5000).
+-define(TIMEOUT, 50000).
 
 -define(OP_REPLY, 1).
 -define(OP_MSG, 1000).

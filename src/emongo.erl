@@ -197,14 +197,13 @@ process(<<"update">>, L, Pid, Pool, DB, Table) ->
 	Query1 = #emo_query{q=[{<<"getlasterror">>, 1}], limit=1},
     Packet2 = emongo_packet:do_query(DB, "$cmd", Pool#pool.req_id, Query1),
     Resp = emongo_conn:send_sync(Pid, Pool#pool.req_id, Packet1, Packet2, ?TIMEOUT),
-    Result = lists:nth(1, Resp#response.documents),
+    Result = if Resp#response.documents == [] -> []; true ->  lists:nth(1, Resp#response.documents) end,
     UpdatedExisting = proplists:get_value(<<"updatedExisting">>, Result, false),
     NDoc = proplists:get_value(<<"n">>, Result, 0),
     [{updatedExisting, UpdatedExisting}, {ndoc, NDoc}];
 process(<<"find">>, L, Pid, Pool, DB, Table) ->
 	Cond = proplists:get_value(<<"cond">>, L),
 	Fields = proplists:get_value(<<"fields">>, L, [{}]),
-	ct:print("Fields is:~p~n", [Fields]),
 	Limit = proplists:get_value(<<"limit">>, L, 0),
 	Offset = proplists:get_value(<<"offset">>, L, 0),
 	Orderby = proplists:get_value(<<"orderby">>, L, [{}]),
@@ -213,6 +212,7 @@ process(<<"find">>, L, Pid, Pool, DB, Table) ->
 		{orderby, Orderby}], Cond),
 	Packet = emongo_packet:do_query(DB, Table, Pool#pool.req_id, Query),
 	Resp = emongo_conn:send_recv(Pid, Pool#pool.req_id, Packet, proplists:get_value(timeout, L, ?TIMEOUT)),
+    
 	case lists:member(response_options, L) of
 		true -> Resp;
 		false -> Resp#response.documents
