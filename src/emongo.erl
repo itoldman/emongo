@@ -203,10 +203,11 @@ process(<<"update">>, L, Pid, Pool, DB, Table) ->
     [{updatedExisting, UpdatedExisting}, {ndoc, NDoc}];
 process(<<"find">>, L, Pid, Pool, DB, Table) ->
 	Cond = proplists:get_value(<<"cond">>, L),
-	Fields = proplists:get_value(<<"fields">>, L, []),
+	Fields = proplists:get_value(<<"fields">>, L, [{}]),
+	ct:print("Fields is:~p~n", [Fields]),
 	Limit = proplists:get_value(<<"limit">>, L, 0),
 	Offset = proplists:get_value(<<"offset">>, L, 0),
-	Orderby = proplists:get_value(<<"orderby">>, L, []),
+	Orderby = proplists:get_value(<<"orderby">>, L, [{}]),
 	Query = create_query([
 		{fields, Fields}, {limit, Limit}, {offset, Offset},
 		{orderby, Orderby}], Cond),
@@ -612,6 +613,8 @@ create_query([{offset, Offset}|Options], QueryRec, QueryDoc, OptDoc) ->
 
 create_query([{orderby, []}|Options], QueryRec, QueryDoc, OptDoc) ->
 	create_query(Options, QueryRec, QueryDoc, OptDoc);
+create_query([{orderby, [{}]}|Options], QueryRec, QueryDoc, OptDoc) ->
+	create_query(Options, QueryRec, QueryDoc, OptDoc);
 
 create_query([{orderby, Orderby}|Options], QueryRec, QueryDoc, OptDoc) ->
 	Orderby1 = [{Key, case Dir of desc -> -1; _ -> 1 end}|| {Key, Dir} <- Orderby],
@@ -621,6 +624,11 @@ create_query([{orderby, Orderby}|Options], QueryRec, QueryDoc, OptDoc) ->
 % create_query([{fields, Fields}|Options], QueryRec, QueryDoc, OptDoc) ->
 % 	QueryRec1 = QueryRec#emo_query{field_selector=[{Field, 1} || Field <- Fields]},
 % 	create_query(Options, QueryRec1, QueryDoc, OptDoc);
+
+create_query([{fields, []}|Options], QueryRec, QueryDoc, OptDoc) ->
+	create_query(Options, QueryRec, QueryDoc, OptDoc);
+create_query([{fields, [{}]}|Options], QueryRec, QueryDoc, OptDoc) ->
+	create_query(Options, QueryRec, QueryDoc, OptDoc);
 
 create_query([{fields, Fields}|Options], QueryRec, QueryDoc, OptDoc) ->
 	QueryRec1 = QueryRec#emo_query{field_selector=Fields},
