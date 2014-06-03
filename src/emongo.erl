@@ -22,6 +22,7 @@
 %% OTHER DEALINGS IN THE SOFTWARE.
 -module(emongo).
 -behaviour(gen_server).
+-compile(export_all).
 
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, 
 		 handle_info/2, terminate/2, code_change/3]).
@@ -31,11 +32,13 @@
          get_more/4, get_more/5, find_one/3, find_one/4, kill_cursors/2,
 		 insert/3, update/4, update/6, update_sync/4, update_sync/6,
 		 delete/2, delete/3, ensure_index/3, count/2, dec2hex/1,
-		 hex2dec/1, process/1, process_async/1, do_process/2]).
+		 hex2dec/1, process/1, process_async/1]).
 
 -include("emongo.hrl").
 
--record(state, {pools, oid_index, hashed_hostn}).
+-record(state, {pools, oid_index, hashed_hostn, proxy_table}).
+
+-define(PROXY_TABLE, emongo_proxy).
 
 %%====================================================================
 %% Types
@@ -141,19 +144,7 @@ process(Json) ->
 	encode(R, RetID, OtherArg).
 
 process_async(Json) ->
-	spawn(?MODULE, do_process, [self(), Json]).
-
-do_process(Pid, Json) ->	
-	L = jsx:decode(Json),
-	Action = proplists:get_value(<<"action">>, L),
-	DB = tolist(proplists:get_value(<<"db">>, L)),
-	Table = tolist(proplists:get_value(<<"table">>, L)),
-	PoolId = poolid(),
-	{Pid2, Pool} = gen_server:call(?MODULE, {pid, PoolId}, infinity),
-	R = process(Action, L, Pid2, Pool, DB, Table),
-	RetID = proplists:get_value(<<"retID">>, L),
-	OtherArg = proplists:get_value(<<"othArg">>, L),
-	Pid ! {db_result, encode(R, RetID, OtherArg)}.
+	gen_server:cast(emongo, {process_async, self(), Json}).
 
 process(<<"insert">>, L, Pid, Pool, DB, Table) ->
 	Doc = proplists:get_value(<<"doc">>, L),
@@ -202,17 +193,22 @@ process(<<"update">>, L, Pid, Pool, DB, Table) ->
     NDoc = proplists:get_value(<<"n">>, Result, 0),
     [{updatedExisting, UpdatedExisting}, {ndoc, NDoc}];
 process(<<"find">>, L, Pid, Pool, DB, Table) ->
-	Cond = proplists:get_value(<<"cond">>, L),
-	Fields = proplists:get_value(<<"fields">>, L, [{}]),
+	Cond = proplists:get_value(<<"cond">>, L, []),
+	F = proplists:get_value(<<"fields">>, L, []),
+	Fields = if F == [{}] -> []; true ->  F end,
 	Limit = proplists:get_value(<<"limit">>, L, 0),
 	Offset = proplists:get_value(<<"offset">>, L, 0),
-	Orderby = proplists:get_value(<<"orderby">>, L, [{}]),
+	O = proplists:get_value(<<"orderby">>, L, []),
+	Orderby = if O == [{}] -> []; true ->  O end,
 	Query = create_query([
 		{fields, Fields}, {limit, Limit}, {offset, Offset},
 		{orderby, Orderby}], Cond),
+	%%io:format("Query is:~p~n", [Query]),
 	Packet = emongo_packet:do_query(DB, Table, Pool#pool.req_id, Query),
+	
 	Resp = emongo_conn:send_recv(Pid, Pool#pool.req_id, Packet, proplists:get_value(timeout, L, ?TIMEOUT)),
-    
+    %%io:format("find response is:~p~n", [Resp]),
+
 	case lists:member(response_options, L) of
 		true -> Resp;
 		false -> Resp#response.documents
@@ -346,7 +342,7 @@ update_sync(PoolId, Collection, Selector, Document, Upsert, MultiUpdate) when ?I
 	Query1 = #emo_query{q=[{<<"getlasterror">>, 1}], limit=1},
     Packet2 = emongo_packet:do_query(Pool#pool.database, "$cmd", Pool#pool.req_id, Query1),
     Resp = emongo_conn:send_sync(Pid, Pool#pool.req_id, Packet1, Packet2, ?TIMEOUT),
-    io:format("response is~p~n", [Resp]), 
+    %%io:format("response is~p~n", [Resp]), 
     case lists:keysearch(<<"updatedExisting">>, 1, lists:nth(1, Resp#response.documents)) of
         false ->
             undefined;
@@ -404,7 +400,8 @@ init(_) ->
 	Pools = initialize_pools(),
 	{ok, HN} = inet:gethostname(),
 	<<HashedHN:3/binary,_/binary>> = erlang:md5(HN),
-	{ok, #state{pools=Pools, oid_index=1, hashed_hostn=HashedHN}}.
+	TableId = ets:new(?PROXY_TABLE, [set]),
+	{ok, #state{pools=Pools, oid_index=1, hashed_hostn=HashedHN, proxy_table=TableId}}.
 
 %%--------------------------------------------------------------------
 %% Function: %% handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -469,7 +466,11 @@ handle_call({pid, PoolId}, _From, #state{pools=Pools}=State) ->
 					{reply, {undefined, Pool}, State}
 			end
 	end;
-	
+
+handle_call({process, Action, L, Pid2, Pool, DB, Table}, _From, State) ->
+	R = process(Action, L, Pid2, Pool, DB, Table),
+	{reply, R, State};
+
 handle_call(_, _From, State) -> {reply, {error, invalid_call}, State}.
 
 %%--------------------------------------------------------------------
@@ -478,7 +479,15 @@ handle_call(_, _From, State) -> {reply, {error, invalid_call}, State}.
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
-handle_cast(_Msg, State) ->
+handle_cast({process_async, From, Json}, #state{proxy_table=Table} = State) ->
+	case ets:lookup(Table, From) of
+		[] ->
+			{ok, NewProxy} = emongo_proxy:start_link(),
+			ets:insert(Table, {From, NewProxy}),
+			NewProxy ! {process_async, From, Json};
+		[{_, Proxy}|_] ->
+			Proxy ! {process_async, From, Json}
+	end, 
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -505,6 +514,10 @@ handle_info({'EXIT', Pid, {PoolId, tcp_closed}}, #state{pools=Pools}=State) ->
 				State#state{pools=Pools1}
 		end,
 	{noreply, State1};
+
+handle_info({'EXIT', Pid, _}, #state{proxy_table=Table} = State) ->
+	ets:delete(Table, Pid),
+	{noreply, State};
 	
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -613,9 +626,6 @@ create_query([{offset, Offset}|Options], QueryRec, QueryDoc, OptDoc) ->
 
 create_query([{orderby, []}|Options], QueryRec, QueryDoc, OptDoc) ->
 	create_query(Options, QueryRec, QueryDoc, OptDoc);
-create_query([{orderby, [{}]}|Options], QueryRec, QueryDoc, OptDoc) ->
-	create_query(Options, QueryRec, QueryDoc, OptDoc);
-
 create_query([{orderby, Orderby}|Options], QueryRec, QueryDoc, OptDoc) ->
 	Orderby1 = [{Key, case Dir of desc -> -1; _ -> 1 end}|| {Key, Dir} <- Orderby],
 	OptDoc1 = [{<<"orderby">>, Orderby1}|OptDoc],
@@ -624,11 +634,6 @@ create_query([{orderby, Orderby}|Options], QueryRec, QueryDoc, OptDoc) ->
 % create_query([{fields, Fields}|Options], QueryRec, QueryDoc, OptDoc) ->
 % 	QueryRec1 = QueryRec#emo_query{field_selector=[{Field, 1} || Field <- Fields]},
 % 	create_query(Options, QueryRec1, QueryDoc, OptDoc);
-
-create_query([{fields, []}|Options], QueryRec, QueryDoc, OptDoc) ->
-	create_query(Options, QueryRec, QueryDoc, OptDoc);
-create_query([{fields, [{}]}|Options], QueryRec, QueryDoc, OptDoc) ->
-	create_query(Options, QueryRec, QueryDoc, OptDoc);
 
 create_query([{fields, Fields}|Options], QueryRec, QueryDoc, OptDoc) ->
 	QueryRec1 = QueryRec#emo_query{field_selector=Fields},
@@ -697,10 +702,6 @@ hex0(14) -> $e;
 hex0(15) -> $f;
 hex0(I) ->  $0 + I.
 
-poolid() ->
-	{ok, [{PoolId, _}|_]} = application:get_env(emongo, pools),
-	PoolId.
-
 tobin(V) when is_binary(V) ->
 	V;
 tobin(V) when is_list(V) ->
@@ -715,10 +716,39 @@ tolist(V) when is_binary(V) ->
 tolist(V) when is_atom(V) ->
 	atom_to_list(V).  
 
+poolid() ->
+	{ok, [{PoolId, _}|_]} = application:get_env(emongo, pools),
+	PoolId.
+
 encode(ok, RetID, OtherArg) ->
 	jsx:encode([{result, <<"ok">>}, {retID, RetID}, {othArg, OtherArg}]);
 encode(V, RetID, OtherArg) ->
 	jsx:encode([{result, V}, {retID, RetID}, {othArg, OtherArg}]).
+
+test1() ->
+	[emongo:insert(test1, "sushi", [{<<"rolls">>, I}]) || I <- lists:seq(1, 1000)],
+	R = [{I, emongo:find(test1, "sushi", [], []) }|| I<- lists:seq(1, 1000)],
+	io:format("R is ~p~n", [R]),
+	ok.
+
+test2() ->
+	[emongo:insert(test1, "test", [{<<"rolls">>, I}]) || I <- lists:seq(1, 1000)],
+	Json = jsx:encode([{db, <<"test">>}, {table, <<"test">>}, {action, <<"find">>}]),
+	R = [{I, emongo:process(Json) }|| I<- lists:seq(1, 1000)],
+	io:format("R is ~p~n", [R]),
+	ok.
+
+test3() ->
+	[emongo:insert(test1, "test", [{<<"rolls">>, I}]) || I <- lists:seq(1, 1000)],
+	Json = jsx:encode([{db, <<"test">>}, {table, <<"test">>}, {action, <<"find">>}]),
+	R = [{I, emongo:process_async(Json) }|| I<- lists:seq(1, 1000)],
+	io:format("R is ~p~n", [R]),
+	ok.
+
+
+
+
+
 
 
 
