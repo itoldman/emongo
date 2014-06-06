@@ -43,7 +43,7 @@ handle_info({process_async, From, Json}, State) ->
 	Table = emongo:tolist(proplists:get_value(<<"table">>, L)),
 	PoolId = emongo:poolid(),
 	{Pid2, Pool} = gen_server:call(emongo, {pid, PoolId}, infinity),
-	R = gen_server:call(emongo, {process, Action, L, Pid2, Pool, DB, Table}),
+	R = gen_server:call(emongo, {process, Action, L, Pid2, Pool, DB, Table}, ?TIMEOUT),
 	%%io:format("response is:~p~n", [R]),
 	RetID = proplists:get_value(<<"retID">>, L),
 	OtherArg = proplists:get_value(<<"othArg">>, L),
