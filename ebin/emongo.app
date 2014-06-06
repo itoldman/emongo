@@ -9,4 +9,4 @@
                                    {port,27017},
                                    {database,"test"}]}]}]},
               {modules,[emongo,emongo_app,emongo_bson,emongo_conn,
-                        emongo_packet,emongo_sup]}]}.
+                        emongo_packet,emongo_proxy,emongo_sup]}]}.
